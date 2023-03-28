@@ -1,0 +1,225 @@
+//@version=5
+strategy(title='BRM Flow', shorttitle='BRM v1.0', overlay = true, format=format.price, precision=2, pyramiding=1, initial_capital=1000, calc_on_order_fills=false, calc_on_every_tick=false, default_qty_type=strategy.percent_of_equity, default_qty_value=60, currency=currency.USDT)
+
+// Version
+GRUPO_about = '关于'
+Version = input.string(defval='2023.02.12.1', title='版本号', options=['2023.02.12.1'], tooltip="请尽量使用最新版本的策略, 使用最新版本之前, 请记得先保存现有参数", group = GRUPO_about)
+Readme = input(defval='https://www.pine.com', title='🚀 策略使用说明', tooltip="为了更好的帮助大家使用, 欢迎加入社群讨论", group = GRUPO_about)
+
+
+// EMA SETTINGS
+GRUPO_emaSet = '入场指标1: EMA设置'
+fastEma = input.bool(false, title='启用快速 EMA', tooltip="开启后, 策略将会基于快速EMA的设置, 来作为触发入场 信号的条件之一", group = GRUPO_emaSet)
+fastEmaLen = input.int(title='快速EMA 长度', minval=1, maxval=100, defval=12, tooltip = "设置快速EMA的长度 \n\n当只选择开启快速EMA时, 策略会在收盘价高于快速EMA 时入场做多, 低于快速EMA时入场做空。\n\n当同时开启了慢速EMA时, 做多时, 快速EMA要在慢速 EMA之上, 做空时, 快速EMA要在慢速EMA之下", group = GRUPO_emaSet)
+slowEma = input.bool(false, title='启用慢速 EMA', tooltip = "开启后, 策略将会基于快速EMA的设置, 来作为触发入场信号的条件之一", group = GRUPO_emaSet)
+slowEmaLen = input.int(title='慢速EMA 长度', minval=1, maxval=200, defval=40, tooltip = "设置慢速EMA的长度 \n\n当只选择开启慢速EMA时, 策略会在收盘价高于慢速EMA 时入场做多, 低于慢速EMA时入场做空。\n\n当同时开启了快速EMA时, 做多时, 快速EMA要在慢速 EMA之上, 做空时, 快速EMA要在慢速EMA之下", group = GRUPO_emaSet)
+
+// TRIGGER 1 SWITCH
+GRUPO_TriggerSet = '入场指标2: 选择器'
+trigger2_Switch = input.string(defval='Stochastic RSl', title='入场指标2-选择需要的指标', options=['Stochastic RSl', 'MACD', 'EMA'], group = GRUPO_TriggerSet, tooltip = "MACD与Stoch RSI的效果近似, 所以我在这里设置了一个入场指标的选择器, 二选一。\n\n如果选择了MACD指标作为入场确认信号之一的话, 策略将调用下边MACD的相关参数。\n\n反之, 如果选择了Stoch RSI指标的话, 策略将调用下边 Stoch RSI的相关参数来作为入场确认信号之一。")
+
+// STOCHASTIC RSI SETTINGS
+GRUPO_stochRsiSet = '入场指标2-1: STOCH RSI设置'
+stochRsiSource = input.timeframe("", title='时间周期', group = GRUPO_stochRsiSet, tooltip = "默认Chart是代表当前图表试用的时间级别, 也可以选择其他时间级别来计算Stoch RSI的结果。")
+stochRsiFast = input.int(title='K (Stochastic Fast)', minval=1, maxval=100, defval=3)
+stochRsiSignal= input.int(title='D (Signal Line)', minval=1, maxval=100, defval=3)
+stochRsiLen = input.int(title='Stoch指标长度', minval=1, maxval=100, defval=14)
+rsiLen_stoch = input.int(title='RSI长度', minval=1, maxval=100, defval=14)
+rsiSource_stoch = input.source(title='RSI来源', defval=close)
+
+stochRsi_buy_sell_area = input.bool(true, title='设置StochRSI的超买和超卖限制区域', tooltip = "如果启用, 该策略将仅考虑那些发生在超卖/超买区址 Stoch RSI交叉", inline='11')
+stochRsiBuy = input.int(title='Stochastic RSl 超买基准值', minval=1, maxval=100, defval=80, tooltip = "Stoch RSI交叉需要发生在该水平之上, 该策略才能将其视为有效的空头头寸的入场信号")
+stochRsiSell= input.int(title='Stochastic RSl 超卖基准', minval=1, maxval=100, defval=20, tooltip = "Stoch RSI交叉需要发生在该水平之下,该策略才能将其视为有效的多头头寸的入场信号")
+
+// MACD 参数配置
+GRUPO_macdSet = '入场指标2-2: MACD设置'
+macdPeriod = input.timeframe("", title='时间周期', group = GRUPO_macdSet, tooltip = "默认Chart代表当前图表的时间级别, 也可以选择其他时间周期来计算MACD的结果。")
+macdFastLen = input.int(title='快线长度', minval=1, maxval=1000, defval=12)
+macdSlowLen = input.int(title='慢线长度', minval=1, maxval=1000, defval=26)
+macdSignLen = input.int(title='信号长度', minval=1, maxval=1000, defval=9)
+macdSource = input.source(title='来源', defval=close)
+macdMap = input.string(defval='做多: 交叉发生在阈值之下时-做空: 交叉发生在阈值之上时', title='多/空区域映射', options=['做多: 交叉发生在阈值之下时-做空: 交叉发生在阈值之上时', '做多: 交叉发生在阈值之上时-做空: 交叉发生在阈值之下时'], tooltip = "选择你希望MACD触发做多或者做空信号的方式。\n\n做多: 交叉发生在阈值之下时 - 做空: 交叉发生在阈值之上时\n\n当选择该方式时, 只有当交叉发生在阈值之下的金叉, 才会被认为是有效的做多信号；交叉发生在阈值之上的死叉, 才会被认为是有效的做空信号。\n\n做多: 交叉繁盛在阈值之上时-做空: 交叉发生在阈值之下时\n\n当选择该方式时, 只有在阈值之上发生的金叉才会被认为是有效的做多入场信号。在阈值之下发生的死叉, 才会被认为是有效的做空入场信号。")
+macdJC = input(title='MACD金叉阈值 (做多)', defval=0, tooltip = "在选择好MACD多/空区域映射方法后, 策略会参考这里设置的阈值, 来触发有效的做多入场信号")
+macdSC = input(title='MACD死叉阈值 (做空)', defval=0, tooltip = "在选择好MACD多/空区域映射方法后, 策略会参考这里设置的阈值, 来触发有效的做空入场信号")
+
+
+// SUPERTREND (TRIGGER 3)
+GRUPO_TriggerSet2 = '入场指标3: SUPERTREND设置'
+trigger2_Supertrend = input.bool(true, title='使用Supertrend作为触发指标2', inline='trigger2', group = GRUPO_TriggerSet2)
+show_Supertrend = input.bool(false, title='显示绘图', tooltip = "开启Supertrend,设置好Supertrend相关参数后,策略将使用Supertrend作为入场指标信号之一", inline='trigger2', group = GRUPO_TriggerSet2)
+atrLen = input.int(title='ATR长度', minval=1, maxval=200, defval=26)
+atrMulti = input.int(title='ATR倍数', minval=1, maxval=100, defval=3)
+changeDir = input.bool(true, title='需要Supertrend变向', tooltip = "如果选取此选项, 那么只有当超级趋势在平仓后改变方向时才会建仓。这样可以阻止策略在平仓后立即连续减仓。你也可以理解为, 在一波Supertrend趋势中, 只能做一单。再次开单前, Supertrend必须要变向过")
+
+
+// RSI FILTER SETTINGS (TRIGGER 4)
+GRUPO_RsiSet = '入场指标4: RSI设置'
+useRsi = input.bool(false, title='启用RSI指标过滤',group = GRUPO_RsiSet, tooltip = "如果启用, 该策略将仅在 RSI 高于/低于指定的RSI 超买/ 超卖水平时开仓。一个好的做法是, 将单独的RSI指标添加到Tradingview的图表以更好地了解它如何影响策略的入场")
+rsiLen = input.int(title='RSI长度', minval=1, maxval=200, defval=14)
+rsiBuy = input.int(title='RSI超买基准值', minval=1, maxval=100, defval=70, tooltip = "设置RSI的超买基准值, 在此基准值之上的RS|！数值区域称为超买区")
+rsiSell = input.int(title='RSI超卖基准值', minval=1, maxval=100, defval=30, tooltip = "设置RSI的超卖基准值, 在此基准值之下的RS/数值区域称为超卖区")
+rsiMap = input.string(defval='超卖区-做多；超买区-做空', title='RSI区域映射', options=['超卖区-做多；超买区-做空', '超卖区-做空；超买区-做多'], tooltip = "配置您希望策略使用RSI的方式: \n\n“超卖区---做多；超买区---做空“\n\n在此模式下, 仅当RS！处于超卖区域时才开多单；仅当RSI 处于超买区域时才开空单\n\n“超卖区---做空；超买区---做多\n\n在此模式下, 仅当RSI处于超买区域时才开多单；仅当RSI 处于超卖区域时才开空单")
+
+
+// ADX FILTER SETTINGS (TRIGGER 5)
+GRUPO_ADXSet = '入场指标5: ADX设置'
+useADX = input.bool(false, title='启用ADX指标过滤', tooltip = "如果开启, 策略将考虑ADX基准值作为入场条件之一", group = GRUPO_ADXSet)
+adxSoom = input.int(title='ADX平滑', minval=1, maxval=200, defval=14)
+diLen = input.int(title='DI长度', minval=1, maxval=200, defval=14)
+adxBase = input.int(title='ADX基准值', minval=1, maxval=200, defval=15, tooltip = "设置ADX的基准值, 只有K线收盘时的ADX数值大于此基准值时, 才可以开单入场")
+
+
+// EARLY LEAVE 1
+GRUPO_earlyLeaveSet1 = '提早离场1 设置'
+leaveBase = input.float(title='如果价格超过', minval=1, maxval=100, defval=1.5, inline='leave1', group = GRUPO_earlyLeaveSet1)
+leave_Switch1 = input.string(title='', defval='盈亏比', options=['盈亏比', '%', 'TP1', 'TP2'], inline='leave1', group = GRUPO_earlyLeaveSet1, tooltip = "在这一行设定触发提早离场Early Leave的先决条件, 当价格向盈利方向触及设定的条件后, 如果行情发生回撤, 才会触发下边的Supertrend变向或者触及EMA后提前离场。\n\n1) 盈亏比: 如果前面的数值是1.6的话, 代表当价格达到 1.5倍盈亏比之后激活下方选择的提早离场设置。\n\n2) %: 如果前面的数值是1.5的话, 代表当价格向止盈方向运动达到1.5%之后激活Early Leave。\n\n3)TP1或者TP2: 如果选择TP1或者TP2作为提早离场的条件的话, 前面填写的数值被忽略, 但是在策略的分仓止盈部分 (Additional TP Levela)必须要开启对应的TP1 或者TP2才可以")
+leaveSuperTrendUse = input.bool(true, title='SuperTrend改变方向之后离场', tooltip = "开启此选项, 策略将在Supertrend发生变向的时候, 触发离场", group = GRUPO_earlyLeaveSet1)
+leaveEmaUse = input.bool(false, title='收盘价穿过EMA之后: ', inline='leave_eam', group = GRUPO_earlyLeaveSet1)
+leaveEmaBase = input.int(title='', minval=1, maxval=200, defval=60, inline='leave_eam', tooltip = "策略将在收盘价穿过设定的EMA之后提早离场",group = GRUPO_earlyLeaveSet1)
+
+
+// EARLY LEAVE 2
+GRUPO_earlyLeaveSet2 = '提早离场2 设置'
+leave_timeUse = input.bool(false, title='持续时间（分钟) 之后: ', inline='leave2', group = GRUPO_earlyLeaveSet2)
+leave_timeBase = input.int(title='', minval=1, maxval=2000, defval=720, inline='leave2', tooltip = "策略将在运行了设置的时问之后提早离场",group = GRUPO_earlyLeaveSet2)
+
+
+// STRATEGY CONTROLS
+GRUPO_control = '策略控制 设置面板'
+enable_long = input.bool(true, title='开启做多', group = GRUPO_control, tooltip = "如果不开启, 策略将不会执行多头入场")
+enable_short = input.bool(true, title='开启做空', group = GRUPO_control, tooltip = "如果不开启, 策略将不会执行空头入场")
+limit_date = input.bool(true, title='回测日期范围限定', group = GRUPO_control, tooltip = "设定回测的开始及结束日期, 实际回测可追溯的第一根K 柱取决于你的Tradingview账户等级限制\n\n例如, 如果你是免费订阅用户, TradingView将允许您访问5000个历史柱。\n\n在1小时图上, 这意味着该策略只能对5000小时的价格数据进行回测, 也就是大约208天\n\n在1分钟图表上, 它将是5000分钟, 也就是大约3.5天\n\n所以, 将“开始日期设置为2年前, 不会神奇地让你访问2 年的价格数据。因此, 请确保你设置的开始日期在第一个可用历史柱之后。\n\n*****非常重要*****\n\n当你调教好策略参数打算进行实盘操作时, 要把开始日期设定在当前, 或者一个未来几分钟的时间点。这样, 策略将从你设定的未来的时间点开始重新计算执行的结果, 所执行的本金, 也是你在‘策略的Property‘面板内的金额。\n\n如果不这样做的话, 你实盘时的下单金额以及本金, 是以之前累计的策略结果为基础的, 有可能与你的预期不符。")
+
+
+head_date = input.time(timestamp("Feb 01 2020 08:00:00 UTC+8"), title='开始日期', group = GRUPO_control, tooltip = "设定回测/交易开始的日期及时间")
+tail_date = input.time(timestamp("Feb 01 2025 20:00:00 UTC+8"), title='结束日期', group = GRUPO_control, tooltip = "设定回测/交易结束的日期及时间")
+
+limt_weektime = input.bool(false, title='限制每周的开单日期和时间', group = GRUPO_control, tooltip = "如果开启的话, 仅在下边勾选的一周内的日期才会做单,  没有被勾选的周内日期不做单。例如: 如果不勾选周六和周日, 那么意味着策略不会在这两天开单")
+limt_sat = input.bool(true, title='Sat', inline='week', group = GRUPO_control)
+limt_sun = input.bool(true, title='Sun', inline='week', group = GRUPO_control)
+limt_mon = input.bool(true, title='Mon', inline='week', group = GRUPO_control)
+limt_tue = input.bool(true, title='Tue', inline='week', group = GRUPO_control)
+limt_wed = input.bool(true, title='Wed', inline='week', group = GRUPO_control)
+limt_thu = input.bool(true, title='Thu', inline='week', group = GRUPO_control)
+limt_fri = input.bool(true, title='Fri', inline='week', group = GRUPO_control)
+limit_time = input.time(timestamp("Feb 01 2022 20:00:00 UTC+8"), title='Between:', group = GRUPO_control, tooltip = "设定回测/交易时间范围")
+
+
+// ORDER SIZE SETTINGS
+// 挂单设置 杠杆倍数 开仓数量 最大订单
+GRUPO_orderSet= '仓位管理设置'
+fixedPos = input.bool(false, title='开启个性化仓位模式设置', group = GRUPO_orderSet, tooltip = "通常情况下, Tradingview为所有的策略默认提供了一套仓位管理方案, 就在策略的”属性”面板中。但不幸的是,  Tradingview并没有提供基于以下两种方法的仓位管理模式\n\n1)本金百分比的交易风险 (% risk of equity)\n\n2)基于固定风险 (Fixed Risk of Value)\n\n开启此选项后, 策略将忽略“属性“中的仓位管理规划, 而以此处的个性化方法来替代（属性中的初始本金金额依然被调用, 并且非常重要, 所以在开始实盘之前, 一定要查看策略“属性”中本金的设置, 以使其符合你的预期) \n\n策略提供了4种不同的下单仓位管理方式。\n\n1) 基于合约数\n\n2) 基于现金额或者理解为交易额\n\n3) 基于本金的百分比\n\n4) 基于本金X百分比的风险---价格到达止损位时, 会损失本金的百分之几\n\n第五种固定交易风险金额 (例如每次固定亏损100) ")
+posSize = input.float(title='下单仓量', minval=1, maxval=100, defval=2, inline='order1', group = GRUPO_orderSet)
+posType = input.string(title='', defval='% risk of equity权益X% 的风险', inline='order1', options=['Contracts合约数', 'Cash现金额', '% of equity权益的百分比', '% risk of equity权益X% 的风险', 'Fixed risk amount固定风险金额'], group = GRUPO_orderSet, tooltip = "根据下拉菜单中的四种仓位管理模式来填入数值\n\n- Contracts合约数: \n\n策略将按照给出的数量, 下一个当前交易品种的合约数作为仓位。例如2个ETH, 1个BTC等\n\nCash现金额: \n\n假设你有本金10000, 你希望策略按照6000的交易额来确定交易仓位, 此时ETH价格2000, 那么策略将完成一笔 6000/2000=3个ETH仓位的交易\n\n% of equity权益的百分比: \n\n假设你有10000本金, 想用30%的本金/权益进行, 那么此时策略会完成一笔10000*0.3/2000=1.5ETH的交易\n\n- % risk of equity-权益X%的风险: \n\n假设你有10000本金/权益, 你想每次的交易风险是本金的2%, 也就是亏损200元, 那么此时, 策略首先会通过计算, 得到开仓价与止损价之间的距离（价格差) , 然后用200除以这个价格差, 来获得需要下单的仓位。假设 ETH入场价2000, 止损价1950, 止盈价2100, 那么此时为了达成一旦交易亏损, 亏损金额为200的目的, 策略会开一个200/50=4个ETH仓位的交易\n\n- Fixed risk amount固定风险金额\n\n假设你希望每笔交易的损失是一个固定金额200 USDT,  那么在这里你就输入200就好了。")
+posMode = input.string(title='下单仓位模式', defval='允许无限大的头寸规模', options=['允许无限大的头寸规模', '将头寸价值限制为账户规模', '如果无法承担所需的头寸规模, 则跳过入场'], inline='leave1', group = GRUPO_orderSet, tooltip = "想象以下情况: \n\n- 你正在查看1分钟时间范围内的 BTC/USD 图表, 其中个比特币的交易价格为 50, 000美元\n\n你的初始资本为10, 000 美元\n\n你将“权益风险百分比“设置为1% (即您账户的100美元) \n\n该策略在 50, 000 美元处发出多头入场信号, 止损设置为 49, 950 美元, 止盈设置为 50, 100美元 (盈亏比 2: 1) \n\n-为了满足价格达到止损位损失100本金的需求, 你需要购买2 个比特币。(如果你要买1比特币, 风险仅为 50 美元, 是你期望风险的一半) \n\n为了购买2 个比特币, 你需要100, 000 美元, 但你的账户上只有10, 000 美元。您希望策略如何进行？您有以下选择: \n\n1。 允许无限大的头寸规模: 该策略将假设你可以获得比你账户上的资金更多的资金（即通过杠杆) , 它将为这笔交易开一个2比特币的仓位。风险为100美元（你账户规模的1%) \n\n2。 将头寸价值限制为账户规模: 该策略将假设你无法使用杠杆, 它将下达一个你可以承受的最大头寸（(10, 000美元) 的仓位, 对应此时BTC 50, 000美元的价格, 也就是\n\n0.2比特币, 这个仓位下到达止损位, 将损失10美元（你的0.1%帐户大小) \n\n3。如果无法承担所需的头寸规模, 则跳过入场: 该策略将假定当按照风险控制开仓的头寸金额大于你的权益时, 忽视本次入场")
+
+
+// DCA补仓功能设置
+GRUPO_orderMargin= 'DCA补仓功能设置'
+posMargin = input.bool(true, title='开启DCA补仓功能', group = GRUPO_orderMargin, tooltip = "如果开启本功能, 策略将基于后边的补仓方法、补仓大小、补仓间距等不同逻辑, 进行补仓操作。\n\nDCA补仓功能务必谨慎使用, 最好是在基于百分比, 并且数值比较大的情况下使用。如果本身的止损范围比较窄,  又使用了DCA补仓功能的话, 一旦亏损, 将会扩大损失。\n\n个人推荐1次补仓为好, 止损空间比较大时可以考虑2次补仓。在开启了”显示活动交易的价格标签“功能后, 通过观察活跃交易左边的补仓触发价格、变动百分比、仓量标签, 来判断策略执行的设置, 与你的预期是否一致, 并做出调整。同样的, 你也可以通过回放Replay功能, 将时间调整到已完成过的交易处, 观察相关的设置与你的预期是否一致。\n\n策略在触发了交易后, 除了绘制入场价线段和止损价线段之外, 还会在这中间, 绘制红色的补仓价线段。")
+posMarginLimit = input.int(title='最大补仓次数', minval=1, maxval=20, defval=1, group = GRUPO_orderMargin, tooltip = "允许的最大的补仓次数")
+posMarginSize = input.float(title='第一笔补仓仓量(%)', minval=1, maxval=200, defval=100, inline='margin', group = GRUPO_orderMargin)
+posMarginType = input.string(title='Of', defval='基于剩余仓量', inline='margin', options=['基于剩余仓量', '基于初始仓量'], group = GRUPO_orderMargin)
+posMarginBase = input.float(title='第一次补仓触发时变动百分比', minval=1, maxval=200, defval=30, inline='margin2', group = GRUPO_orderMargin)
+posMarginCond = input.string(title='', defval='入场价与止损价之间距离的%', options=['入场价与止损价之间距离的%', '价格变动%'], inline='margin2', group = GRUPO_orderMargin, tooltip = "这里提供了两种补仓思路, 一种是价格向止损方向变化了多少百分比时进行第一次补仓, 另一种是价格自入场价向止损价方向, 距离变化了多少百分比时补仓, 你可以通过 Tradingview的回放功能, 将时间回撤到任意一个已完成的交易过程中, 在开启了”显示活动交易的价格标签“功能后, 通过观察交易左边的补仓触发价格、百分比、仓量标签, 来判断策略执行的设置, 与你的预期是否一致, 并做出调整。")
+
+posMarginSizeChange = input.int(title='补仓仓量变化比例', minval=1, maxval=20, defval=1, tooltip = "这是针对第二次及以后的补仓而言的, 填入的数字相当于一个倍数。\n\n计算第二笔补仓数量的公式是: \n\n第二笔补仓数量=第一笔补仓数量X 补仓仓量变化比例\n\nWhen n>= 2\n\nDCAn_order_size = DCA(n-1)_order_size X DCA_Entries_Scale\n\n如果在你的设置中有第三笔补仓的需求的话, 那么第三笔补仓数量= 第二笔补仓数量X 补仓仓量变化比例\n\n*****非常重要*****\n\n请谨慎设置第一笔补仓仓量(%)及补仓仓量变化比例, 建议这两个数值为1, 最好不要大于2")
+posMarginGapChange = input.int(title='补仓间距变化比例', minval=1, maxval=20, defval=1, tooltip = "假设间距变化比例设置为2, 初次补仓是在价格变动3%的时候, 那么第二次补仓就是在价格变动3+3*2=9%的时候补仓。你可以通过观察已完成交易的绘图---入场价与！\n\n损价之间的红色横线, 来判断系统执行的补仓间距与你的\n\n设想是否一致")
+posMarginTP = input.string(title='保持止盈设置', defval='Yes', options=['Yes', 'No'], tooltip = "选择‘是‘意味着每当发生补仓后, 目标止盈位将会移动,  重新计算目标止盈价, 以与策略的止盈设置维持一致 (例如初始止盈设置5%, 那么现在平均入场价变化后, 止盈位也将移动以维持5%的目标；再举个例子, 如果原先的止盈是2比1盈亏比的设置, 那么移动了平均入场价后, 将基于现在止损位与平均入场价, 重新计算达到2比1盈亏比的目标价) 。这里如果选择‘否‘的话, 那么止盈位置将保持初始的止盈价格, 不发生变动。")
+
+
+// 初始止损设置
+GRUPO_StopLoss_1= '初始止损设置'
+showStopLoss = input.bool(false, title='绘制止损线', group = GRUPO_StopLoss_1, tooltip = "这里容易产生歧义, 默认不要开启。只有当你想验证一下 初始入场时的止损点, 是不是符合你选择的止损方式的数 值时, 才需要开启。")
+StopLoss1_Switch = input.string(title='请选择 初始止损设置', defval='基于百分比', options=['基于ATR', '基于Supertrend', '基于MA均线', '基于百分比', '基于Ticks-最小刻度', 'Disabled'], group = GRUPO_StopLoss_1, tooltip = "从下拉菜单中选择你喜欢的止损方式, 如果选择第二个‘ATR Trailing Stops Colored 作为止损设置的话, 需要同时开启ATR Stops Colored指标作为入场条件。如果此前提条件未开启的话, 那么选择ATR Trailing Stop止损选项时, 将会用普通的ATR止损参数来替代。这个选项是专门针对币币King的第一个策略介绍视频中的策略而准备的")
+
+stopLoss_ATRLen = input.int(title='止损ATR的长度', minval=1, maxval=100, defval=14)
+stopLoss_ATRMulti = input.int(title='止损ATR的长度', minval=1, maxval=100, defval=3)
+stopLoss_EAMType = input.string(title='止损均线的种类', defval='EMA', options=['RMA', 'SMA', 'EMA', 'WMA'], tooltip = "提供了4种不同的均线止损方式")
+stopLoss_EAMLen = input.int(title='止损均线的长度', minval=1, maxval=200, defval=40)
+stopLoss_Percent = input.int(title='止损%数值', minval=1, maxval=50, defval=4)
+stopLoss_Ticks = input.int(title='止损的Ticks数', minval=1, maxval=50000, defval=500, tooltip = "Ticks是图表中显示的交易品种的最小单位。假设ETH在图表中的价格是2002.53, 一个Tick就是0.01。价格变动到2003.53相当于变动了100个Ticks。\n同样的交易品种, 在不同交易所所显示的最小刻度单位有时是不一样的。在上边的例子中, 如果B交易所显示ETH 的价格是2002.5, 那么1个TICK就等于0.1。")
+
+
+// 第二止损设置
+GRUPO_StopLoss_2 = '第二止损设置'
+stopLoss2_Switch = input.string(title='第二止损设置', defval='Disabled', options=['基于ATR', '基于Supertrend', '基于MA均线', '基于百分比', '基于Ticks-最小刻度', 'Disabled'], group = GRUPO_StopLoss_2, tooltip = "这里是第二套止损方式的激活开关, 默认关闭。开启时,  设置好触发第二套止损的条件, 以及选择好第二套止损的方式。第二套止损方式选择后, 对应的参数, 会调用第一套止损方式里对应的数值")
+stopLoss2_Cond = input.string(title='当止损价符合条件时触发', defval='小于', options=['大于', '小于', '等于'], group = GRUPO_StopLoss_2, tooltip = "触发第二套止损设置的条件。\n\n举个例子: 假设初始止损设置是基于ATR, 长度14, 倍数 5, 触发入场时, 计算的止损价相对于入场价, 变动了 6%。\n\n而你不希望止损价过于远离入场价, 而想限制它不要超过 3%。\n\n那么, 你就可以在这里设置当初始止损价大于3%时, 使用第二套止损设置, 替换掉初始止损设置, \n\n第二止损使用的方法在这个例子中是基于百分比, 而具体的止损百分比数值, 策略会调用你在初始止损设置---百\n\n分比设置的参数")
+stopLoss2_Base = input.int(title='Than ', minval=1, maxval=100, defval=3, inline = "SL2", group = GRUPO_StopLoss_2)
+stopLoss2_Type = input.string(title='', defval='%', options=['%', 'Ticks'], inline = "SL2", group = GRUPO_StopLoss_2, tooltip = "用%和Ticks来衡量")
+
+stopLoss_Min = input.int(title='最小止损%', minval=0, maxval=50, defval=0, tooltip = "按照设置的止损方式得到的止损价, 相对于入场价, 小于设置的百分比时, 将忽略入场")
+stopLoss_Max = input.int(title='最大止损%', minval=1, maxval=1000, defval=99, tooltip = "按照设置的止损方式得到的止损价, 相对于入场价, 大于设置的百分比时, 将忽略入场")
+
+
+
+// 移动止损及追踪设置
+GRUPO_MovingTraces_SL = '移动止损及追踪设置'
+moving_Use = input.bool(true, title='开启动态移动追踪止损功能', group = GRUPO_MovingTraces_SL, tooltip = "22")
+moving_Mode = input.string(title='模式', defval='移动', options=['移动', '追踪', '移动+追踪'], group = GRUPO_MovingTraces_SL, tooltip = "22")
+
+
+movingPoint_Base = input.float(title='步骤2:止损位移动', minval=0, maxval=100, defval=0.5, inline = "move1", group = GRUPO_MovingTraces_SL, tooltip = "22")
+movingPoint_Type = input.string(title='', defval='盈亏比', options=['%', 'Ticks', '盈亏比'], inline = "move1", group = GRUPO_MovingTraces_SL, tooltip = "22")
+movingPrice_Base = input.float(title='步骤1:价格移动', minval=0, maxval=100, defval=1, inline = "move2", group = GRUPO_MovingTraces_SL, tooltip = "22")
+movingPrice_Type = input.string(title='', defval='盈亏比', options=['%', 'Ticks', '盈亏比'], inline = "move2", group = GRUPO_MovingTraces_SL, tooltip = "22")
+
+trace_Cond = input.string(title='追踪激活条件', defval='价格移动之后激活', options=['一直激活', '移动止损位之后激活', '价格移动之后激活', '到达上一个支点Pivot之后激活'], group = GRUPO_MovingTraces_SL, tooltip = "22")
+tracePrice_Base = input.float(title='步骤1:价格移动', minval=0, maxval=100, defval=1, inline = "trace1", group = GRUPO_MovingTraces_SL, tooltip = "22")
+tracePrice_Type = input.string(title='', defval='盈亏比', options=['%', 'Ticks', '盈亏比'], inline = "trace1", group = GRUPO_MovingTraces_SL, tooltip = "22")
+
+trace_Len = input.float(title='支点回测长度', minval=0, maxval=100, defval=14, group = GRUPO_MovingTraces_SL, tooltip = "22")
+trace_MinRange = input.float(title='最小距离(%)', minval=0, maxval=100, defval=0, group = GRUPO_MovingTraces_SL, tooltip = "22")
+trace_MaxRange = input.float(title='最大距离(%)', minval=0, maxval=200, defval=99, group = GRUPO_MovingTraces_SL, tooltip = "22")
+
+trace_Range = input.string(title='追踪距离', defval='基于ATR追踪', options=['保持距离', '基于EMA均线追踪', '基于ATR追踪'], group = GRUPO_MovingTraces_SL, tooltip = "22")
+trace_EMALen = input.float(title='EMA长度', minval=0, maxval=100, defval=20, group = GRUPO_MovingTraces_SL, tooltip = "22")
+trace_ATRLen = input.float(title='ATR长度', minval=0, maxval=100, defval=14, group = GRUPO_MovingTraces_SL, tooltip = "22")
+trace_ATRMulti = input.float(title='ATR倍数', minval=0, maxval=200, defval=2.6, group = GRUPO_MovingTraces_SL, tooltip = "22")
+
+
+// 初始止盈设置
+GRUPO_TakeProfit_1= '初始止盈设置'
+takeProfit1_Switch = input.string(title='请选择 止盈设置', defval='基于盈亏比', options=['基于盈亏比', '基于ATR', '基于百分比', '基于Ticks', 'Disabled'], group = GRUPO_TakeProfit_1, tooltip = "选择止盈设置所使用的方法")
+
+takeProfit = input.float(title='止盈盈亏比数值', minval=0, maxval=100, defval=1.5, tooltip = "基于盈亏比设置止盈时, 这里填写的数字将代表盈亏比: X比1")
+takeProfit_ATRLen = input.int(title='止盈ATR长度', minval=1, maxval=100, defval=14, tooltip = "选择ATR止盈方式时, 这里的ATR设置参数将被调用绘制止盈线")
+takeProfit_ATRMulti = input.int(title='止盈ATR倍数', minval=1, maxval=100, defval=2, tooltip = "选择ATR止盈方式时, 这里的ATR设置参数将被调用绘制止盈线")
+takeProfit_Percent = input.int(title='止盈%数值', minval=1, maxval=50, defval=4, tooltip = "选择基于百分比的止盈方式时, 将调用这里的参数确定止盈位, 并绘制止盈线")
+takeProfit_Ticks = input.int(title='止盈Ticks数值', minval=1, maxval=500000, defval=1000, tooltip = "选择基于Ticks数作为止盈方式时, 将调用这里的参数确定止盈位, 并绘制止盈线")
+
+takeProfit_Min = input.int(title='最小止盈%', minval=0, maxval=50, defval=0, tooltip = "如果通过选定的止盈方法, 计算得出的止盈位, 小于此处的数值, 那么将忽略入场信号。反之, 通过这里的设置,  也等于对最小和最大止盈位的区间进行了限定。")
+takeProfit_Max = input.int(title='最大止盈%', minval=1, maxval=1000, defval=99, tooltip = "如果通过选定的止盈方法, 计算得出的止盈位, 大于此处的数值, 那么将忽略入场信号。反之, 通过这里的设置,  也等于对最小和最大止盈位的区间进行了限定。")
+
+// 第二止盈设置
+GRUPO_TakeProfit_2 = '第二止盈设置'
+takeProfit_2_Use = input.bool(false, title='使用第二止盈方案', group = GRUPO_TakeProfit_2, tooltip = "启用这个功能, 策略将会在符合条件的时候, 移动止盈价格")
+takeProfit_2_Cond = input.string(title='触发条件: ', defval='两者都可以', options=['交易开始时', '交易过程中', '两者都可以'], group = GRUPO_TakeProfit_2, tooltip = "选择第二止盈启动触发的条件。\n\n当选择“交易开始时”: \n\n如果ADX的数值符合设置的条件, 那么将直接通过倍数计算新的止盈价。\n\n当选择“交易过程中“时: \n\n如果ADX值在交易开始时并不符合, 但是在交易过程中满足条件了的话, 那么此时将会移动止盈价。\n\n当选择“两者都有”时: \n\n符合上边任何一种情况, 都会触发移动止盈价")
+takeProfit_2_Multi = input.float(title='移动止盈倍数 ', minval=1, maxval=100, defval=1.2, group = GRUPO_TakeProfit_2, tooltip = "这里填写一个倍数, 来计算移动后的止盈价。计算公式是: 初始止盈价x移动止盈倍数")
+takeProfit_2_ADX_Period = input.timeframe("", title='当ADX', inline = "TP2", group = GRUPO_TakeProfit_2)
+takeProfit_2_ADX_Cond = input.string(title='', defval='大于', options=['大于', '小于', '等于'], inline = "TP2", group = GRUPO_TakeProfit_2)
+takeProfit_2_ADX_Base = input.float(title='', minval=1, maxval=100, defval=30, inline = "TP2", group = GRUPO_TakeProfit_2, tooltip = "首先选择ADX的时间周期, 这里通常认为会选择一个比当前图表时间周期更大的时间周期来作为触发条件。\n\n接着选择逻辑符号: 大于, 小于, 等于, 满足条件时候触发。\n\n最后填写ADX数值, 策略以此数值以及上边的逻辑判断规则为依据, 来触发移动止盈")
+
+
+// 减仓止盈设置
+GRUPO_PosDown_TP = '减仓止盈设置'
+TP1_Use = input.bool(true, title='第一止盈位TP1: 平仓仓位%', inline = "posTP1", group = GRUPO_PosDown_TP)
+TP1_PosSize = input.float(title=' ', minval=1, maxval=100, defval=30, inline = "posTP1", group = GRUPO_PosDown_TP, tooltip = "勾选此选项, 当价格到达设定的第一止盈位时, 会对在此之前每一笔入场仓位对应的x% 的仓位进行结算离场, 第一止盈位只会触发一次。\n\n举个例子: \n\n1)假设没有使用DCA补仓功能, 初始入场4个ETH合约,  第一止盈位设置平仓仓位25%, 那么到达TP1后, 结算1 合约, 剩余3个ETH合约。\n\n2)假设开启了1次补仓的DCA策略, 且补仓在TP1之前触发, 补仓量为4ETH合约, 那么触发TP1时, 将分别对初始仓位4ETH以及补仓仓位4ETH的25%进行结算, 了结总计1+1=2 ETH合约的仓位, 剩余3+3=6个ETH合约。\n\n3)假设在TP1之前触发了2次补仓, 第一次补仓4ETH, 第二次补仓8ETH, 加上初始仓位4ETH, 那么在TP1时, 将会结算4*0.25+4*0.25+8*0.25=4个ETH合约, 剩余仓位是12个ETH")
+TP1_Base = input.float(title='在: ', minval=1, maxval=100, defval=2, inline = "posTP1_2", group = GRUPO_PosDown_TP)
+TP1_Tpye = input.string(title='', defval='基于百分比', options=['基于盈亏比', '基于百分比', '基于Ticks'], inline = "posTP1_2", group = GRUPO_PosDown_TP, tooltip = "策略提供了三种测量TP1止盈位的方法, 分别是: \n\n基于盈亏比\n\n-基于%\n\n基于Ticks\n\n举例说明: \n\n1)假设在此处你选择了基于盈亏比, 数值填写的是0.5: \n\n策略将会在价格向止盈方向运动了0.5倍盈亏比位置时,  进行TP1的结算。\n\n选择此方法, 最好初始止盈设置也是基于盈亏比, 例如2 比1盈亏比, 那么会比较容易理解和验证。\n\n策略实际是需要先测量出平均入场价与当前止损价之间的价差作为1倍盈亏比的基准, 假设这个价差是100, 那么你选择0.5的时候, 就意味着价格向止盈方向运动了50,  将进行TP1了结。\n\n2) 假设此处你选择了基于%触发TP1, 数值填写的是2: \n\n策略将会在价格向止盈方向运动了2%的时候进行TP1的结算\n\n3) 假设此处你选择了基于Ticks, 数值填写了1000: \n\n策略将会在价格向止盈方向运动了1000Ticks的时候进行 TP1的结算")
+
+TP2_Use = input.bool(false, title='第二止盈位TP2: 平仓仓位%', inline = "posTP2", group = GRUPO_PosDown_TP)
+TP2_PosSize = input.float(title=' ', minval=1, maxval=100, defval=30, inline = "posTP2", group = GRUPO_PosDown_TP, tooltip = "勾选此选项, 当价格到达设定的第二止盈位时, 会对在此之前每一笔入场仓位对应的x% 的仓位进行结算离场, 第二止盈位只会触发一次。\n\n举个例子: 假设TP1的离场仓位设置为25%, TP2的离场仓位设置为50%, 初始仓位4ETH\n\n情况1: 没有DCA补仓策略时\n\n策略会在价格触及TP1时, 止盈4*25%=1个ETH的仓位, 剩余3个ETH, 价格来到TP2时, 止盈4*50%=2个 ETH的仓位, 剩余1ETH。\n\n情況2: 有1个DCA补仓, 补仓数量为4ETH, 且DCA补仓\n\n发生在TP1之前\n\n策略会在价格触及TP1时, 止盈4*25%+4*25%=2个 ETH, 剩余6个ETH仓位。价格来到TP2时, 止盈 4*50%+4*50%=4个ETH的仓位, 剩余2个ETH。\n\n情况3: 有2个DCA补仓, 初始补仓数量为4ETH, 第二次补仓数量为8ETH, 且行情首先触发TP1, 然后触发 DCA1, 再接着触发DCA2, 接着TP2。\n\n在此情况下, 当触发TP1时, 策略止盈4*25%=1ETH,  剩余3ETH, 接着触发了DC1补仓4ETH, 此时仓位是 TETH, 接着又触发了DCA2, 增加8ETH, 此时仓位是 7+8=15ETH。\n\n接下来触发TP2, 那么在触发TP2之前, 系统认为有3个入场的交易, 入场仓位分别为: \n\nPosition1(初始仓位） = 4ETH\n\nPosition2(DCA1) = 4ETH\n\nPosition3(DCA2) = 8ETH\n\n那么根据定义, TP2是按照设定的百分比, 对之前每笔入场仓位进行结算。由初始设置条件得知, TP2的结算百分比为50% , 所以此刻TP2结算的仓量是\n\n4*0.5+4*0.5+8*0.5=2+2+4=8ETH\n\n在TP2之后, 这笔交易还剩余7ETH的仓位\n\n情况4: 理论上不建议大家把TP1-TP3的仓位扣除百分比总和超过100%。那么假设TP1设置的结算仓位占比是 50%, TP2设置的比例是80%, 依然使用上面情况3的 DCA设置的话, 将会出现以下的计算结果: \n\nTP1时, 止盈仓位=4*50%=2ETH,  Position1剩余2ETH TP2时: \n\nPosition1(初始仓位)止盈仓位=4*80%=3.2ETH, 而此刻")
+TP2_Base = input.float(title='在: ', minval=1, maxval=100, defval=2, inline = "posTP2_2", group = GRUPO_PosDown_TP)
+TP2_Tpye = input.string(title='', defval='基于百分比', options=['基于盈亏比', '基于百分比', '基于Ticks'], inline = "posTP2_2", group = GRUPO_PosDown_TP, tooltip = "通常情况下, TP2的止盈位置, 应该比TP1更加接近止盈位。\n\n假设TP1设置的是0.5倍盈亏比的话, 那么TP2通常的做法是设置成1或者比0.5大的数值\n\n假设TP1选择的是2%, 那么通常TP2期望的数值是大于 2%的, 以此类推。\n\n当然, 如果设置成比TP1要小的话。。。策略也会结算的, 不过请不要折磨它")
+
+TP3_Use = input.bool(false, title='第三止盈位TP3: 平仓仓位%', inline = "posTP3", group = GRUPO_PosDown_TP, tooltip = "参考第二止盈位TP2 说明")
+TP3_PosSize = input.float(title=' ', minval=1, maxval=100, defval=30, inline = "posTP3", group = GRUPO_PosDown_TP)
+TP3_Base = input.float(title='在: ', minval=1, maxval=100, defval=2, inline = "posTP3_2", group = GRUPO_PosDown_TP)
+TP3_Tpye = input.string(title='', defval='基于百分比', options=['基于盈亏比', '基于百分比', '基于Ticks'], inline = "posTP3_2", group = GRUPO_PosDown_TP)
+
+
+// 警报设置
+GRUPO_AlarmSetting = '警报设置'
+alarmLongIn = input.bool(true, title='启动做多入场警报', inline = "longIn", group = GRUPO_AlarmSetting, tooltip = "启用“做多: 入场“警报。\n\n当策略进入多头头寸时, 将发送警报。\n\n一旦您在策略设置中启用了您希望接收的警报(在此窗口中), 并完成了下边录入框中需要填写的内容之后, 下一步就需要在TradingView中创建一个警报, 将相关的警报内容发送给第三方。\n\n创建警报窗口打开后, 选择“币币King-多条 EMA。 并且在下面的下拉菜单中选择(alert0)- function calls only\n\n大部分的第三方转发信号的网站, 会提供Webhook链接地址用于接受由 Tradingview发出的警报信息, 取得链接地址后, 在Tradingview警报设置的Webhook URL处填写该链接。\n\n警报名称处可以自行定义。\n\n一切设置妥当后, 选择“创建“就可以了")
+goLongMsg = input.text_area(defval = '{\n"id": "long",\n"symbol": "BTC-USDT-SWAP",\n"price": {{open}},\n"side": "buy",\n"ordType": "market",\n"posChange": 0,\n"amount": {{strategy.position_size}},\n"posValue": {{strategy.position_value}},\n"enable_stop_gain": true,\n"open_price": {{open}},\n"close_price": {{open}},\n"enable_stop_loss": true,\n"stop_loss_trigger_price": 4,\n"stop_loss_order_price": 4,\n"tdMode": "isolated",\n"lever": 3.5,\n"apiSec": "hankmonn"\n}', title = "做多入场警报信号内容", tooltip = "这是将发送到给定电子邮件地址/Webhook URL的有效信息内容。\n\n使用 Webhook 时, 警报将作为 POST 请求发送。接受 JSON 有效信息内容。＜如果使用 JSON,请求将与 “Content-Type: applicationjjson“标头一起发送>。\n\n您还可以通过在警报消息中使用placeholder让警报包含动态值:\n\n{{open}} 当前K柱开盘价\n\n{{high}} 当前K柱最高价位\n\n{{low}} 当前K柱最低价位\n\n{{close}} 当前K柱收盘价\n\n还有许许多多的可以用来在警报中显示动态数据的 placeholder, 我无法—一在这里展示, 具体请参考 Tradingview警报部分的相关说明")
